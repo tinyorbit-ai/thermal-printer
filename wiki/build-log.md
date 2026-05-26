@@ -56,3 +56,63 @@ fill these in after first successful physical print):
   *design* grid 32 chars; the *hardware* maximum is typically wider on an
   80mm TSP 100III. Phase 3 updates ADR 0004 with this measurement.
 - **Photograph of the receipt** attached.
+
+---
+
+## Phase 2 — Templates + Receipt builder (2026-05-26)
+
+**Branch:** `phase/2-templates` → squashed onto `main`.
+
+**What was done.** The CLI surface flipped from `thermal-print hello` to
+`thermal-print print <name>`, dispatching to auto-discovered template
+modules in `src/thermal_print/templates/`. The receipt grammar from ADR
+0004 is now real code: `Receipt` with `header / subheader / divider /
+row / text / spacer / footer / cut / send`, a 32-char design grid, and
+a well-defined overflow policy (value-first row truncation with `…`;
+word-wrap on `text` with hard-break for tokens longer than the grid).
+Cut emission moved out of `printer.py` and into `Receipt.cut()` — single
+emitter, asserted by snapshot.
+
+Two shipped templates: `hello` (the phase-1 string, now a template) and
+`demo` (exercises every primitive — double-height header, `=` and `-`
+dividers, two rows, body line, footer, one cut). Tests: snapshot of the
+demo byte stream + structural assertions (`_cuts == 1`, every emitted
+line ≤ 32 chars), full overflow-policy coverage on `row()` and `text()`,
+and the three auto-discovery failure modes (`_smoke.py` loads as a
+valid template, broken `.py` exits 2 naming the file, duplicate `NAME`
+exits 2 naming both files).
+
+**Why these choices.**
+- **`Dummy` as the internal buffer.** python-escpos ships a `Dummy`
+  printer that accepts the same API as the real USB printer but captures
+  bytes to `.output`. Reusing it means the *exact* byte stream the
+  printer will receive is what the snapshot test captures — no
+  re-encoding gap between test and runtime.
+- **`_writeln` tracks lines in addition to bytes.** Auxiliary state
+  (`_lines`, `_cuts`) lets the structural assertions check semantics
+  ("exactly one cut", "no line > 32") without parsing escpos escape
+  sequences out of the byte stream. The snapshot already covers the
+  byte-level contract.
+- **`_discover_in_path(path, package_name)` factored from
+  `discover_templates()`.** Production calls it with the real package
+  (so imports use the package namespace); tests call it with a
+  temp-dir path (so they can synthesize broken / duplicate templates
+  cheaply). One discovery code path, two callers.
+
+**Verifiable gate — status.**
+- ✅ Gates 2, 3, 4, 5 green:
+    - Gate 2: `demo` byte stream contains a double-height header,
+      `=` divider, two `row()` lines, `-` divider, a body line, a
+      footer line, and exactly one cut (verified by tests).
+    - Gate 3: `pytest tests/test_receipt_layout.py` is green (10
+      tests including the snapshot vs. `demo_receipt.bin` fixture and
+      the "exactly one cut" + "no line > 32" structural assertions).
+    - Gate 4: `test_template_discovery.py` proves `_smoke.py` loads,
+      a broken `.py` exits 2 naming the file, and a duplicate `NAME`
+      exits 2 naming both files (9 tests).
+    - Gate 5: `printer.py` no longer emits cut; architecture is in
+      sync. Snapshot enforces "exactly one cut" in the demo stream.
+- ⏳ Gate 1 (paper out of the printer for both templates) is the
+  hardware portion — deferred with phase 1's hardware checks.
+
+**Pytest:** 19 passed in 0.54s.

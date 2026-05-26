@@ -1,9 +1,10 @@
 """USB transport for the Star TSP 100III.
 
 Only this module talks to the USB device. It opens the printer by
-vendor/product ID, writes raw bytes, and closes. In phase 1 it also emits
-the cut command directly — phase 2 moves cut ownership into the Receipt
-builder (see [[plan]] phase 2 gate 5).
+vendor/product ID, hands the open device to :class:`Receipt.send`, and
+closes. The cut command is emitted by :meth:`Receipt.cut`, **not** here —
+keeping exactly one cut emitter in the codebase (per ADR 0004 and the
+hardened architecture).
 """
 
 from __future__ import annotations
@@ -58,11 +59,3 @@ def open_printer() -> Usb:
         raise SystemExit(1)
 
 
-def print_hello() -> None:
-    """Print 'hello, matt' and fire the cutter. Phase-1 smoke."""
-    p = open_printer()
-    try:
-        p.textln("hello, matt")
-        p.cut()
-    finally:
-        p.close()
