@@ -185,3 +185,76 @@ hardening review:
   background printer process ever appears.
 
 **Pytest:** 36 passed in 0.19s.
+
+---
+
+## Phase 4 — Session stats from Claude Code JSONL (2026-05-26)
+
+**Branch:** `phase/4-session` → squashed onto `main`.
+
+**What was done.** A new `session.py` reads any Claude Code session
+JSONL and returns a `SessionStats` dataclass with the deterministic
+facts (`input_tokens`, `output_tokens`, `cached_input_tokens`,
+`cached_creation_tokens`, `duration_s`, `files`, `tools`, `started_at`,
+`model`, `assistant_turns`). The encoded-cwd resolution lists
+`~/.claude/projects/` and matches the directory whose name the encoder
+produces for the given cwd; the encoder is `re.sub(r"[^a-zA-Z0-9-]",
+"-", cwd)`, confirmed against real entries including
+`-Users-USER--dotconfig-instances-...` (a `/.dotconfig` collapses to
+`--dotconfig`).
+
+A new `session` template renders these as rows on paper. Empty-state
+visual: zero assistant turns prints `(session just started)` instead
+of a table of zeros so a brand-new session still feels intentional.
+Tools list caps at the top 5 by count to stay legible on 32-column
+paper.
+
+`cli.py` grows `--session-id`, `--cwd`, and `--latest` flags on the
+`print` subcommand. `--session-id` is required by default;
+`--latest` is the interactive escape hatch (per ADR 0005). `/receipt`
+in phase 5 will always pass `--session-id` explicitly.
+
+**Why these choices.**
+- **Dataclass over dict for `SessionStats`.** Every field the receipt
+  touches is typed and autocompletable; ADR 0005 carries the schema
+  as a single table. A dict would scatter the contract.
+- **Tolerant coercion `int(... or 0)`.** Future Claude Code schema
+  drift (a usage field going missing, or shipping as null) silently
+  zeros that one field rather than throwing — the receipt is sacred,
+  the diagnostics are not.
+- **Encoder is verified, not guessed.** Tested against the real
+  `-Users-USER--dotconfig-...` directory so the
+  `/`+`.` → `--` collapse is locked in code with a test that would
+  catch a future encoder change.
+- **Integration test, but skippable.** A live-session test attempts to
+  resolve this repo's actual JSONL and parse it; if Claude Code
+  hasn't created one yet (clean machine), the test skips rather than
+  hard-failing. Catches schema drift on the developer's box.
+
+**Verifiable gate — status.**
+- ✅ Gate 2 (token totals match an independent `jq` extraction):
+  `test_parse_matches_jq_extraction` runs `jq -s '[.[]
+  | select(.type=="assistant") | .message.usage.<key> // 0] | add'`
+  for all four token fields and asserts equality with the parser's
+  output.
+- ✅ Gate 3 (parser tests on a fixture JSONL, with partial trailing
+  line + non-assistant line types + zero-assistant session):
+  `tests/test_session_parser.py` is green (16 tests including all
+  three robustness paths).
+- ✅ Gate 4 (encoded-cwd resolution by listing, with the
+  `--dotconfig` collapse): `test_encode_cwd_collapses_dots_to_dashes`
+  is green; `find_project_dir` uses listing-based lookup.
+- ✅ Gate 5 (`--session-id` required; `--latest` opt-in for
+  debugging): tested by `test_find_session_file_requires_session_id`
+  and `test_find_session_file_latest`.
+- ⏳ Gate 1 (`thermal-print print session --session-id <SID> --cwd
+  <PATH>` prints a receipt of token totals etc.) — hardware portion,
+  deferred with the earlier phases.
+
+**ADR added.** `wiki/decisions/0005-session-stats-schema` documents
+which JSONL fields the receipt surfaces and which it deliberately
+drops, the partial-trailing-line rule, the encoded-cwd encoder spec
+(verified against real entries), and the explicit-by-default session
+selection rationale.
+
+**Pytest:** 52 passed in 0.25s.

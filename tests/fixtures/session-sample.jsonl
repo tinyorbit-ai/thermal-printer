@@ -1,0 +1,10 @@
+{"type":"system","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:00.000Z","content":"session start"}
+{"type":"user","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:05.000Z","message":{"role":"user","content":"hello"}}
+{"type":"file-history-snapshot","isSnapshotUpdate":false,"messageId":"a","snapshot":{}}
+{"type":"assistant","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:10.000Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/Users/USER/code/project/README.md"}}]}}
+{"type":"attachment","attachment":{"name":"x.png"},"cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:15.000Z"}
+{"type":"assistant","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:20.000Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":200,"output_tokens":75,"cache_read_input_tokens":1500,"cache_creation_input_tokens":0},"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"tool_use","name":"Read","input":{"file_path":"/Users/USER/code/project/src/main.py"}}]}}
+{"type":"last-prompt","lastPrompt":"hi","leafUuid":"x","sessionId":"sid"}
+{"type":"user","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:25.000Z","message":{"role":"user","content":"thanks"}}
+{"type":"assistant","cwd":"/Users/USER/code/project","timestamp":"2026-05-26T10:00:30.000Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":50,"output_tokens":25,"cache_read_input_tokens":500,"cache_creation_input_tokens":50},"content":[]}}
+{"type":"ai-title","aiTitle":"a chat","sessionId":"sid"}

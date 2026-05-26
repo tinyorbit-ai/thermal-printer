@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-05-26T10:00:10.000Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":42,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[]}}
+{"type":"assistant","timestamp":"2026-05-26T10:00:20.000Z","message":{"mode

@@ -108,6 +108,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "template",
         help="Template name (one of the auto-discovered modules in templates/).",
     )
+    p_print.add_argument(
+        "--session-id",
+        help="Claude Code session id (required for the `session` template "
+        "unless --latest is given).",
+    )
+    p_print.add_argument(
+        "--cwd",
+        help="Working directory whose Claude Code session to read.",
+    )
+    p_print.add_argument(
+        "--latest",
+        action="store_true",
+        help="Use the most recently modified session JSONL in the project dir. "
+        "Interactive escape hatch — /receipt always passes --session-id.",
+    )
     return parser
 
 
@@ -125,7 +140,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-        ctx: dict[str, Any] = {}  # phase 2: empty; later phases populate
+        ctx: dict[str, Any] = {
+            "session_id": args.session_id,
+            "cwd": args.cwd,
+            "latest": args.latest,
+        }
         r = Receipt()
         templates[args.template](ctx, r)
 
