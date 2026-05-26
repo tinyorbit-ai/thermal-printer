@@ -10,12 +10,19 @@ writes, and closes the USB device.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from escpos.printer import Dummy
+from PIL import Image
+
+from . import state
 
 if TYPE_CHECKING:
     from escpos.escpos import Escpos
+
+
+ASSETS_DIR = Path(__file__).parent / "assets"
 
 
 __all__ = ["Receipt", "GRID_WIDTH"]
@@ -53,6 +60,36 @@ class Receipt:
         """Track the line for structural assertions and emit it."""
         self._lines.append(line)
         self._buf.textln(line)
+
+    # ── logo ────────────────────────────────────────────────────────────
+
+    def logo(self, name: str) -> Receipt:
+        """Raster a 1-bit PNG from :data:`ASSETS_DIR`, centered.
+
+        ``name`` is the bare filename without extension (e.g. ``"crab"``
+        loads ``assets/crab.png``). python-escpos handles the raster
+        encoding via the GS v 0 command path.
+        """
+        asset = ASSETS_DIR / f"{name}.png"
+        if not asset.exists():
+            raise FileNotFoundError(f"logo asset not found: {asset}")
+        img = Image.open(asset)
+        img.load()
+        self._buf.set(align="center")
+        self._buf.image(img)
+        self._buf.set()
+        return self
+
+    # ── serial ──────────────────────────────────────────────────────────
+
+    def serial(self) -> Receipt:
+        """Emit ``REC-#NNNN``, right-aligned. Bumps the persisted counter."""
+        n = state.bump_serial()
+        line = f"REC-#{n:04d}"
+        self._buf.set(align="right")
+        self._writeln(line)
+        self._buf.set()
+        return self
 
     # ── headings ────────────────────────────────────────────────────────
 
@@ -121,8 +158,8 @@ class Receipt:
     # ── footer ──────────────────────────────────────────────────────────
 
     def footer(self, text: str) -> Receipt:
-        """Single-line centered footer."""
-        self._buf.set(align="center")
+        """Single-line footer, small (font B) and centered."""
+        self._buf.set(align="center", font="b")
         self._writeln(text)
         self._buf.set()
         return self

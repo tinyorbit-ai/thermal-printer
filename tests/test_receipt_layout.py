@@ -2,36 +2,33 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
-from thermal_print.receipt import Receipt
+from thermal_print.receipt import ASSETS_DIR, Receipt
+from thermal_print.templates import demo as demo_template
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 DEMO_SNAPSHOT = FIXTURE_DIR / "demo_receipt.bin"
 
 
-def _build_demo_receipt() -> Receipt:
-    """The exact sequence demo.py emits — kept in sync so the snapshot is a
-    faithful record of the demo template's byte stream."""
+def _build_demo_receipt(hermetic_state: Path) -> Receipt:
+    """Render the real demo template against a Receipt with the serial
+    counter seeded so the snapshot is deterministic."""
+    hermetic_state.parent.mkdir(parents=True, exist_ok=True)
+    hermetic_state.write_text('{"serial": 41}')  # next bump → 42
     r = Receipt()
-    r.header("CLAUDE CODE")
-    r.divider("=")
-    r.row("Tokens", "4,221")
-    r.row("Time", "47m")
-    r.divider("-")
-    r.text("a sweet little summary line.")
-    r.footer("thermal-print")
-    r.cut()
+    demo_template.render({}, r)
     return r
 
 
 # ── snapshot ───────────────────────────────────────────────────────────
 
 
-def test_demo_byte_stream_matches_snapshot() -> None:
-    r = _build_demo_receipt()
+def test_demo_byte_stream_matches_snapshot(hermetic_state: Path) -> None:
+    r = _build_demo_receipt(hermetic_state)
     actual = r.bytes
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     if not DEMO_SNAPSHOT.exists():
@@ -39,25 +36,30 @@ def test_demo_byte_stream_matches_snapshot() -> None:
     expected = DEMO_SNAPSHOT.read_bytes()
     assert actual == expected, (
         "demo byte stream changed. If intentional, delete "
-        f"{DEMO_SNAPSHOT.relative_to(Path.cwd()) if DEMO_SNAPSHOT.is_absolute() else DEMO_SNAPSHOT} "
-        "and re-run."
+        f"tests/fixtures/{DEMO_SNAPSHOT.name} and re-run."
     )
 
 
 # ── structural (the snapshot's pair) ───────────────────────────────────
 
 
-def test_demo_has_exactly_one_cut() -> None:
-    r = _build_demo_receipt()
+def test_demo_has_exactly_one_cut(hermetic_state: Path) -> None:
+    r = _build_demo_receipt(hermetic_state)
     assert r._cuts == 1
 
 
-def test_demo_no_line_exceeds_grid() -> None:
-    r = _build_demo_receipt()
+def test_demo_no_line_exceeds_grid(hermetic_state: Path) -> None:
+    r = _build_demo_receipt(hermetic_state)
     for line in r._lines:
         assert len(line) <= Receipt.GRID_WIDTH, (
             f"line exceeds 32 chars ({len(line)}): {line!r}"
         )
+
+
+def test_demo_serial_present(hermetic_state: Path) -> None:
+    r = _build_demo_receipt(hermetic_state)
+    # Serial was seeded to 41, so the bump emits REC-#0042.
+    assert any(re.fullmatch(r"REC-#0042", line) for line in r._lines)
 
 
 # ── overflow policy: row ───────────────────────────────────────────────
@@ -129,6 +131,52 @@ def test_divider_rejects_multi_char() -> None:
     r = Receipt()
     with pytest.raises(ValueError):
         r.divider("==")
+
+
+# ── logo ───────────────────────────────────────────────────────────────
+
+
+def test_logo_crab_loads() -> None:
+    """The shipped crab logo asset is present and loadable."""
+    asset = ASSETS_DIR / "crab.png"
+    assert asset.exists(), f"missing logo asset: {asset}"
+    r = Receipt()
+    r.logo("crab")
+    # logo emits raster bytes but no tracked _lines
+    assert len(r._lines) == 0
+    assert len(r.bytes) > 0
+
+
+def test_logo_missing_raises() -> None:
+    r = Receipt()
+    with pytest.raises(FileNotFoundError):
+        r.logo("does-not-exist")
+
+
+# ── serial ─────────────────────────────────────────────────────────────
+
+
+def test_serial_starts_at_one_on_fresh_state() -> None:
+    r = Receipt()
+    r.serial()
+    assert r._lines == ["REC-#0001"]
+
+
+def test_serial_increments_across_receipts(hermetic_state: Path) -> None:
+    first = Receipt()
+    first.serial()
+    second = Receipt()
+    second.serial()
+    assert first._lines == ["REC-#0001"]
+    assert second._lines == ["REC-#0002"]
+
+
+def test_serial_format_is_zero_padded_to_four(hermetic_state: Path) -> None:
+    hermetic_state.parent.mkdir(parents=True, exist_ok=True)
+    hermetic_state.write_text('{"serial": 8}')  # → 9
+    r = Receipt()
+    r.serial()
+    assert r._lines == ["REC-#0009"]
 
 
 # ── cut + send ─────────────────────────────────────────────────────────

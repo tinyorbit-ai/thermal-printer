@@ -116,3 +116,72 @@ exits 2 naming both files).
   hardware portion — deferred with phase 1's hardware checks.
 
 **Pytest:** 19 passed in 0.54s.
+
+---
+
+## Phase 3 — Visual identity: crab, serial, footer (2026-05-26)
+
+**Branch:** `phase/3-visual` → squashed onto `main`.
+
+**What was done.** Every receipt now feels like a designed object. Three
+new primitives landed on `Receipt`:
+
+- `r.logo(name)` rasters a 1-bit PNG from
+  `src/thermal_print/assets/<name>.png` via Pillow, centered, before the
+  body. The shipped asset `crab.png` is a 192×96 silhouette — sized to
+  about a third of the TSP 100III's font-A printable width on 80mm paper
+  (Pillow downscales if a narrower printer ever lands).
+- `r.serial()` emits `REC-#NNNN` right-aligned and bumps the persistent
+  counter in `~/.thermal-printer/state.json`. Storage lives in a new
+  `state.py` module: env-override via `THERMAL_PRINT_STATE` for tests,
+  atomic write (`tmp + os.replace`), lazy parent-dir creation, tolerant
+  read (missing or corrupt → `{}` so the next bump recreates it).
+- `r.footer(text)` now uses font B (small) on top of centered alignment,
+  matching ADR 0004's "small, centered" spec.
+
+`templates/demo.py` updated to use all three — the demo is now the full
+visual showcase (logo → header → dividers → rows → body → spacer →
+footer → serial → cut).
+
+**Why these choices.**
+- **Receipt rasters the image, not the template.** Templates remain
+  pure layout — they say "logo crab" and the builder knows where the
+  bitmap lives, how to center it, and how to hand it to python-escpos.
+  Adding a new logo is a PNG drop, not template code.
+- **`os.replace` not `os.rename`.** `os.replace` is atomic across
+  platforms and overwrites cleanly; a half-written file never survives
+  a crash. Verified by a unit test that spies on `os.replace` and
+  asserts it was called with `state.json.tmp → state.json`.
+- **Hermetic test suite via autouse fixture.** `tests/conftest.py`
+  redirects every test's `state.json` to a per-test temp path. A
+  guard test asserts `THERMAL_PRINT_STATE` is set, so a misconfigured
+  suite fails loudly before it can ever touch `~/.thermal-printer/`.
+- **Snapshot now of the *real* demo template, with seeded state.**
+  The phase-2 snapshot was a hand-rolled receipt sequence; the phase-3
+  snapshot calls `demo.render({}, r)` directly after seeding the
+  serial to 41 (next bump → 42). The fixture captures what the printer
+  actually receives, including the rasterized crab bytes.
+
+**Verifiable gate — status.**
+- ✅ Gate 3 (snapshot tests still green; new snapshot for `demo`
+  includes logo command bytes + serial in the right position):
+  `tests/fixtures/demo_receipt.bin` is the new 2.5 KB snapshot;
+  `test_demo_byte_stream_matches_snapshot` is green.
+- ✅ Gate 5 (state tests hermetic; guard asserts
+  `THERMAL_PRINT_STATE` is set): `tests/conftest.py` +
+  `test_hermetic_env_var_is_set` enforce this.
+- ⏳ Gates 1, 2, 4 (run `thermal-print print demo` twice, verify
+  paper, observe centered logo / legible serial / no row clipping /
+  exactly one cut on paper, `cat ~/.thermal-printer/state.json` shows
+  the bumped counter): hardware portion, deferred with phases 1+2.
+
+**ADR updates.** `wiki/decisions/0004` got both corrections from the
+hardening review:
+- "32 chars is the printer's truth" → "32 chars is the design choice;
+  the hardware permits ~48 at font A on 80mm paper" (precise number
+  goes in once phase 1's hardware step records it).
+- Serial-counter race captured as a deferred accept (Codex called HIGH;
+  kept LOW for single-host single-user). Revisit if a second user or
+  background printer process ever appears.
+
+**Pytest:** 36 passed in 0.19s.

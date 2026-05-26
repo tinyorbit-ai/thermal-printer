@@ -56,9 +56,14 @@ card may skip the row table), but the primitives stay the same.
 - **Shared primitives = visual consistency.** Every template should look like it
   belongs to the same family. If each template re-implements alignment, the
   family drifts within three templates.
-- **32 chars is the printer's truth.** That's the physical width at font A.
-  Locking it in code means templates write strings, not pixels — and a string
-  fitting the grid is a contract the helper can enforce.
+- **32 chars is the *design choice*, not the printer's hardware limit.** The
+  TSP 100III at font A on 80mm paper permits more (typically ~48 chars; the
+  precise measurement is recorded in [[build-log]] from phase 1). 32 was
+  picked for legibility at arm's length, not for density. Locking it in code
+  means templates write strings, not pixels — and a string fitting the grid
+  is a contract the helper can enforce.
+  *(Hardened 2026-05-26: the original wording "32 chars is the printer's
+  truth" was misleading.)*
 - **`state.json` over SQLite / env / `/tmp`.** Durable, inspectable with `cat`,
   trivial to back up, no dep. Personal tool, single host — no concurrency
   concern.
@@ -95,3 +100,11 @@ card may skip the row table), but the primitives stay the same.
 - Snapshot tests of layout primitives (in phase 2) and of individual templates
   (in phase 3+) become possible — render `Receipt` to a byte stream, compare to
   a fixture. This is how we catch regressions in design without paper waste.
+- **Serial-counter race is accepted, not fixed.** The read–modify–write inside
+  `state.bump_serial()` is not locked. On a single-host, single-user personal
+  tool, two `/receipt` invocations colliding in the same millisecond is
+  effectively impossible; adding `fcntl.flock` would be ceremony with no
+  payoff. *(Hardened 2026-05-26: Codex called this HIGH severity in the
+  review; we kept it as a deferred accept — LOW for this deployment
+  context. Revisit if the tool ever gets a second user or a background
+  printer process.)*
