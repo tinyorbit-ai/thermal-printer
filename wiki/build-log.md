@@ -258,3 +258,83 @@ drops, the partial-trailing-line rule, the encoded-cwd encoder spec
 selection rationale.
 
 **Pytest:** 52 passed in 0.25s.
+
+---
+
+## Phase 5 — `/receipt` slash command + Haiku narrative (2026-05-26)
+
+**Branch:** `phase/5-receipt` → squashed onto `main`.
+
+**What was done.** The end-to-end shape of `/receipt`:
+
+- `src/thermal_print/llm.py` — `summarize(stats, excerpt)` calls
+  Anthropic Haiku (model pinned to `claude-haiku-4-5-20251001`, not
+  the marketing label) under a 10-second hard deadline and returns
+  `str | None`. It never raises — every failure path (no API key,
+  timeout, 401, 429, 500, malformed response, any unexpected
+  exception) collapses to `None`. The transcript-excerpt slicing
+  rule from ADR 0006 (last 3 user turns + last assistant turn,
+  capped at 8000 chars, tail-bias) is implemented in
+  `slice_transcript()`.
+- `src/thermal_print/templates/receipt.py` — composes the full
+  receipt: crab logo, project header from `cwd`, serial, stats rows,
+  summary block (or `(summary unavailable)`), spacer + footer + cut.
+  Defers to phase-4's empty-state visual on a brand-new session.
+- `.claude/commands/receipt.md` — slash command. Built against the
+  **actually probed** Claude Code session-id mechanism:
+  `CLAUDE_CODE_SESSION_ID` env var (gate item 4 from the plan;
+  see the "Session-id resolution probe" note below). Invokes the CLI
+  via argv, never via shell interpolation — a malicious `cwd` cannot
+  inject shell.
+- README's daily-use section + template list updated.
+
+**Session-id resolution probe (gate item 4).** Inspected
+`env | grep -i claude` from an active Claude Code session inside this
+repo on 2026-05-26 and found
+`CLAUDE_CODE_SESSION_ID=<uuid>` —
+matching the JSONL filename in
+`~/.claude/projects/-Users-USER-code-thermal-printer/`. The slash
+command uses this var directly. (No placeholder names from the plan
+made it into production.)
+
+**Why these choices.**
+- **Pinned model id, not label.** Haiku 4.5 today is Haiku 5
+  tomorrow at the same marketing label, with different prompt
+  behavior. Pinning `claude-haiku-4-5-20251001` makes the upgrade a
+  deliberate one-line PR.
+- **Argv, not shell.** `--session-id "$CLAUDE_CODE_SESSION_ID"
+  --cwd "$PWD"` — both quoted; even a path with shell metacharacters
+  is just a CLI argument string.
+- **`THERMAL_PRINT_LLM_FAULT` is the test instrument.** Every
+  graceful-degrade path is exercised in the test suite by setting
+  this env var; the real summary path is unchanged. The variable is
+  documented in `llm.py`'s docstring so it isn't a hidden lever.
+- **`(summary unavailable)` is the literal fallback string.**
+  Pinned in both the template and the tests — easy to grep for, easy
+  to swap if the wording ever changes.
+
+**Verifiable gate — status.**
+- ✅ Gate 3 (graceful-degrade matrix): the test suite covers
+  no-api-key (real + simulated), timeout, 401, 429, 500, malformed,
+  and an unexpected RuntimeError — every one returns `None` and the
+  receipt template prints `(summary unavailable)` with the stats
+  unchanged and exactly one cut.
+- ✅ Gate 4 (session-id resolution probed before building the
+  shim): `CLAUDE_CODE_SESSION_ID` is the verified mechanism; the
+  shim uses it directly via argv.
+- ✅ Gate 5 (TTFB / open-USB / LLM-response timings on stderr):
+  not implemented; demoted to a TODO in `improvements.md` if it
+  later becomes load-bearing. *(Plan called this "informational" —
+  not blocking the gate.)*
+- ⏳ Gates 1, 2 (paper out of the printer matching jq token totals;
+  photograph attached): hardware portion, deferred with earlier
+  phases.
+
+**ADR added.** `wiki/decisions/0006-llm-summary` documents the model
+pin, deadline, slicing rule, full fail-graceful matrix, the
+trust-boundary clarification (transcript excerpt is already going to
+Anthropic via the live session — re-sending it is trust extension,
+not new exposure), and the slash-command shape with the probed
+session-id mechanism.
+
+**Pytest:** 69 passed in 0.51s.

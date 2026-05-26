@@ -23,6 +23,7 @@ A CLI to drive my USB Star TSP 100III thermal printer, wired into Claude Code so
 - [[decisions/0003-template-plugin-mechanism]] — auto-discovery of `templates/*.py` files.
 - [[decisions/0004-receipt-layout-grammar]] — 32-char grid, `Receipt` builder API, `~/.thermal-printer/state.json`.
 - [[decisions/0005-session-stats-schema]] — what JSONL fields the receipt surfaces, partial-line robustness, encoded-cwd resolution.
+- [[decisions/0006-llm-summary]] — Haiku model pin, deadline, transcript slicing, fail-graceful matrix, slash-command shim shape.
 
 ### Incident notes
 

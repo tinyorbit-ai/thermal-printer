@@ -21,10 +21,29 @@ claim the interface.
 ## Daily use
 
 ```sh
-thermal-print hello
+thermal-print print demo                           # the visual showcase
+thermal-print print session --session-id $SID --cwd $PWD   # deterministic stats
+thermal-print print receipt --session-id $SID --cwd $PWD   # stats + Haiku narrative
 ```
 
-Prints `hello, matt` and fires the cutter. That's it for phase 1.
+…or, from inside Claude Code, type `/receipt` — the slash command shim
+at `.claude/commands/receipt.md` does the right thing.
+
+Set `ANTHROPIC_API_KEY` in your environment to activate the narrative
+summary on `print receipt`; without it the receipt prints with
+`(summary unavailable)` and the stats unchanged.
+
+## Templates
+
+`thermal-print print <name>` dispatches to any module in
+`src/thermal_print/templates/`. Each module exposes `NAME: str` and
+`render(ctx, r: Receipt)`. Drop a new file there, run the CLI — done.
+The shipped set:
+
+- `hello` — `hello, matt`, smoke test.
+- `demo` — exercises every primitive in the receipt grammar.
+- `session` — deterministic session stats (tokens, time, files, tools).
+- `receipt` — `session` + a 3-5 line Haiku narrative.
 
 ## Development
 
