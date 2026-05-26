@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# uv
+.uv-cache/
+
+# Tests
+.pytest_cache/
+.coverage
+
+# macOS
+.DS_Store
+
+# Local state (the personal serial counter)
+.thermal-print-state.json
