@@ -338,3 +338,138 @@ not new exposure), and the slash-command shape with the probed
 session-id mechanism.
 
 **Pytest:** 69 passed in 0.51s.
+
+---
+
+## Hardware-verification + protocol pivot + LLM pivot (2026-05-27)
+
+**Branch:** `phase/1-hardware-verify` → squashed onto `main`.
+
+Phase 1's deferred hardware verification revealed three things in
+sequence: a wrong product ID, wrong USB endpoints, and — load-bearing
+— that the TSP143IIIU doesn't speak ESC/POS at all. The whole
+character-stream architecture had to pivot to bitmap raster. The full
+incident is captured in
+[[notes/2026-05-27-tsp143iiiu-default-mode]]; this entry summarizes
+what shipped.
+
+### Hardware constants verified
+
+| Constant       | Phase-1 assumption | Hardware truth                     |
+|----------------|--------------------|------------------------------------|
+| VENDOR_ID      | `0x0519`           | `0x0519` ✓                          |
+| PRODUCT_ID     | `0x0017`           | **`0x0003`** (TSP143IIIU specific) |
+| Interface      | python-escpos default | 0                                |
+| OUT endpoint   | `0x01`             | **`0x02`**                          |
+| IN endpoint    | `0x82`             | `0x81`                              |
+| Print width    | 32-char design grid | **72 mm / 576 px** at font A      |
+| Command set    | ESC/POS            | **Star Graphic raster (STR_T-001)** |
+
+### Protocol pivot
+
+The TSP143IIIU reports `MFG:Star;CMD:STAR;MDL:TSP143 (STR_T-001)` via
+USB Printer Class GET_DEVICE_ID and only accepts bitmap data — ESC/POS,
+StarPRNT, and "Star Line Mode" character streams are all silently
+dropped. The Mac App Store config utility is x86-only (not available
+on Apple Silicon), so the protocol was reverse-engineered from Star's
+own open-source CUPS filter (`rastertostar.c`, GPLv2). The
+load-bearing sub-sequence:
+
+```
+ESC @                       — init
+ESC GS 0x03 0x03 0x00 0x00  — clear-data-start
+ESC * r R ESC * r A         — enter raster mode  (LOAD-BEARING)
+ESC * r P 0x30 0x00         — page type: receipt
+ESC * r E '1' '3' 0x00      — doc cut type: partial cut
+0x00                         — start page
+'b' wL wH <data>             — per scan line (repeat)
+ESC * r Y '1' 0x00 ESC FF   — end page (feed + form feed)
+ESC GS 0x03 0x04 0x00 0x00  — clear-data-finish
+0x04 ESC * r B               — end job
+```
+
+Without `ESC * r R / ESC * r A` the printer accepts every byte,
+reports no error (`GET_PORT_STATUS` clean — online, paper present, no
+error), and silently drops the entire job. The cost of this discovery
+was ~3 hours of byte-by-byte experimentation; the cost of *not*
+recording it would be future-Matt rediscovering it.
+
+### What landed in code
+
+- **`star_raster.py`** new module: encodes a PIL `Image` as the full
+  Star Graphic job byte sequence.
+- **`printer.py`** rewritten: uses `pyusb` directly (no
+  `python-escpos`). Exposes `StarUsbPrinter` with `write()` + `close()`.
+  Constants updated to the verified VID/PID/endpoint.
+- **`receipt.py`** rewritten: internal state is a growing PIL image,
+  not a `Dummy` ESC/POS buffer. Primitives draw with `ImageDraw`;
+  Menlo at size 28 (≈17 px/char) lands 32-char rows comfortably
+  inside 576 px. `send()` crops to content + calls
+  `star_raster.encode_job` + writes one USB transaction.
+- **`templates/{hello,demo,session,receipt}.py`** unchanged at the
+  API level — they call the same `Receipt` methods, which now draw
+  bitmap instead of emitting ESC/POS.
+- **`assets/claude.png`** replaces the placeholder `crab.png`.
+  Generated from the Claude Code block-art logo
+  (`▐▛███▜▌ / ▝▜█████▛▘ / ▘▘ ▝▝`) decoded into per-pixel quadrants
+  and scaled 20×40 (vertical-stretch matches terminal cell aspect)
+  for a 400×240 1-bit bitmap.
+- **`python-escpos` removed** from `pyproject.toml`.
+
+### LLM pivot (ADR 0006 revised)
+
+While debugging the hardware, surfaced that the direct-Anthropic-API
+path in `llm.py` was solving a non-problem. The only intended entry
+point is `/receipt` from inside a live Claude Code session — the
+parent agent already has the full transcript in context. Pivoted to:
+
+- **Deleted `src/thermal_print/llm.py`** and `tests/test_llm.py`.
+- **Removed `anthropic` from `pyproject.toml`** (+5 transitive deps gone).
+- **`.claude/commands/receipt.md`** rewritten: the parent Claude Code
+  agent writes the narrative summary directly from its in-context
+  transcript and passes it via `--summary "..."`.
+- **`templates/receipt.py`** reads `ctx["summary"]`; falls back to
+  `(summary unavailable)` when absent. No API call, no fault matrix
+  to maintain.
+- **ADR 0006 fully rewritten** (Status: revised 2026-05-27) — see
+  [[decisions/0006-llm-summary]] for the why and what alternatives
+  were considered.
+
+### Receipt content upgraded (richer + more interesting)
+
+The original `print receipt` showed Tokens in/out/Cached + Time +
+Files + Tools (count only). Tested live and the labels read as
+opaque. Now shows:
+
+- **Model** (`opus-4-7`), Wall time, Turns
+- **Tokens in / Tokens out / Cache hit / Cost** (in USD;
+  approximated via pricing table, overridable via
+  `--cost-override` when the runtime knows the exact number)
+- **Tools** (total + top 4 breakdown)
+- **Files** touched, **Lines added** / **Lines removed**
+  (extracted from each Edit/Write tool result's `structuredPatch`)
+
+The pricing table was calibrated against a real Opus 4.7 session
+whose Claude Code statusline reported $49.25; our approximation comes
+out to $45.54 (within 8%). The slash command can pass `--cost-override`
+for the exact runtime number.
+
+### Verifiable gates — all met against real hardware
+
+- ✅ **Phase 1:** `thermal-print print hello` produces `hello, matt`
+  on paper and fires the partial cutter.
+- ✅ **Phase 2:** `thermal-print print demo` produces the full visual
+  showcase — Claude logo, double-height header, `=`/`-` dividers,
+  rows, body line, footer, single cut.
+- ✅ **Phase 3:** logo centered, serial right-aligned + persisted in
+  `~/.thermal-printer/state.json`, no row clipped, exactly one cut.
+- ✅ **Phase 4:** `thermal-print print session --session-id $SID
+  --cwd $PWD` produces correct token totals (and matches an
+  independent `jq` extraction from the same JSONL).
+- ✅ **Phase 5:** `/receipt`-equivalent CLI invocation (manual
+  `--summary` arg) produces the upgraded receipt with model, cost,
+  lines added/removed, top tools, and a hand-written 4-line summary.
+
+**Pytest:** 58 passed (down from 69 — removed the LLM fault-matrix
+tests). All hardware-verifiable gates from phases 1-5 are now green
+on real paper.

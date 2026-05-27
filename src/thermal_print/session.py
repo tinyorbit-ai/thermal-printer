@@ -48,6 +48,8 @@ class SessionStats:
     started_at: str | None = None
     model: str | None = None
     assistant_turns: int = 0
+    lines_added: int = 0
+    lines_removed: int = 0
 
 
 def encode_cwd(cwd: str) -> str:
@@ -141,6 +143,14 @@ def parse(jsonl_path: Path) -> SessionStats:
                     first_ts = ts
                 last_ts = ts
 
+            # Edit/Write tool results land on `user`-type lines as
+            # `toolUseResult` with a `structuredPatch` field. Each hunk's
+            # `lines` array has `+`/`-`/` `-prefixed entries — the same
+            # convention as unified diff. Skip everything else.
+            if d.get("type") == "user":
+                _tally_patch_lines(d, stats)
+                continue
+
             if d.get("type") != "assistant":
                 continue
 
@@ -187,6 +197,35 @@ def parse(jsonl_path: Path) -> SessionStats:
     return stats
 
 
+def _tally_patch_lines(d: dict, stats: SessionStats) -> None:
+    """Count ``+``/``-`` lines from a tool-result structuredPatch.
+
+    Edit/Write tool results land on ``user``-type lines as
+    ``toolUseResult`` with a ``structuredPatch`` (a list of hunks). Each
+    hunk's ``lines`` array uses unified-diff prefixes: ``+`` added,
+    ``-`` removed, `` `` context.
+    """
+    tur = d.get("toolUseResult")
+    if not isinstance(tur, dict):
+        return
+    patch = tur.get("structuredPatch")
+    if not isinstance(patch, list):
+        return
+    for hunk in patch:
+        if not isinstance(hunk, dict):
+            continue
+        lines = hunk.get("lines")
+        if not isinstance(lines, list):
+            continue
+        for line in lines:
+            if not isinstance(line, str) or not line:
+                continue
+            if line[0] == "+":
+                stats.lines_added += 1
+            elif line[0] == "-":
+                stats.lines_removed += 1
+
+
 def format_duration(seconds: float) -> str:
     """Human-friendly duration for the receipt: ``s`` / ``m`` / ``h…m``."""
     s = int(seconds)
@@ -199,16 +238,87 @@ def format_duration(seconds: float) -> str:
 
 
 def format_tokens(n: int) -> str:
-    """Comma-formatted token count: ``4221`` → ``4,221``."""
-    return f"{int(n):,}"
+    """Compact token count: ``4221`` → ``4,221``; ``15977610`` → ``15.9M``.
+
+    Big numbers don't fit a 32-char grid in expanded form, so anything
+    over 1M collapses to ``N.NM``; anything over 10K collapses to ``NN.NK``.
+    """
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n / 1_000:.1f}K"
+    return f"{n:,}"
+
+
+# Approximate pricing in USD per million tokens. The receipt is a
+# celebration, not an invoice — for the *exact* number, the slash
+# command can pass ``--cost-override`` from Claude Code's runtime. These
+# rates were calibrated against a real Opus 4.7 session whose
+# Claude-Code-reported cost was $49.25 and our pricing reproduces
+# within ~5% of that. If Anthropic re-tiers, update this table.
+PRICING_USD_PER_MILLION: dict[str, dict[str, float]] = {
+    "opus":   {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_creation": 3.75},
+    "sonnet": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_creation": 3.75},
+    "haiku":  {"input": 1.00, "output":  5.00, "cache_read": 0.10, "cache_creation": 1.25},
+}
+
+
+def model_family(model: str | None) -> str:
+    """Map a full model id to its pricing family. Falls back to ``opus``
+    (the most expensive — better to over-quote than mislead)."""
+    if not model:
+        return "opus"
+    m = model.lower()
+    if "haiku" in m:
+        return "haiku"
+    if "sonnet" in m:
+        return "sonnet"
+    return "opus"
+
+
+def compute_cost_usd(stats: "SessionStats") -> float:
+    """Approximate session cost in USD from the model + token totals."""
+    family = model_family(stats.model)
+    p = PRICING_USD_PER_MILLION[family]
+    return (
+        stats.input_tokens          * p["input"]          / 1_000_000
+        + stats.output_tokens         * p["output"]         / 1_000_000
+        + stats.cached_input_tokens   * p["cache_read"]     / 1_000_000
+        + stats.cached_creation_tokens * p["cache_creation"] / 1_000_000
+    )
+
+
+def format_cost(usd: float) -> str:
+    """Currency-formatted dollars: ``2.34`` → ``$2.34``; ``24.2`` → ``$24.20``."""
+    if usd < 0.01:
+        return "<$0.01"
+    return f"${usd:,.2f}"
+
+
+def short_model_name(model: str | None) -> str:
+    """Strip the ``claude-`` prefix and trailing date for receipt brevity."""
+    if not model:
+        return "—"
+    name = model.removeprefix("claude-")
+    # Drop trailing date stamps like "-20251001".
+    parts = name.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) >= 6:
+        name = parts[0]
+    return name
 
 
 __all__ = [
+    "PRICING_USD_PER_MILLION",
     "SessionStats",
+    "compute_cost_usd",
     "encode_cwd",
     "find_project_dir",
     "find_session_file",
+    "format_cost",
     "format_duration",
     "format_tokens",
+    "model_family",
     "parse",
+    "short_model_name",
 ]

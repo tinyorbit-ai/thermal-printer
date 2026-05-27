@@ -136,14 +136,14 @@ def test_divider_rejects_multi_char() -> None:
 # ── logo ───────────────────────────────────────────────────────────────
 
 
-def test_logo_crab_loads() -> None:
-    """The shipped crab logo asset is present and loadable."""
-    asset = ASSETS_DIR / "crab.png"
+def test_logo_claude_loads() -> None:
+    """The shipped Claude logo asset is present and loadable."""
+    asset = ASSETS_DIR / "claude.png"
     assert asset.exists(), f"missing logo asset: {asset}"
     r = Receipt()
-    r.logo("crab")
-    # logo emits raster bytes but no tracked _lines
-    assert len(r._lines) == 0
+    r.logo("claude")
+    # logo doesn't track a text line — it pastes a bitmap onto the canvas.
+    assert r._lines == []
     assert len(r.bytes) > 0
 
 
@@ -192,11 +192,11 @@ def test_multiple_cuts_count_correctly() -> None:
 def test_send_writes_bytes_and_closes_printer() -> None:
     class FakePrinter:
         def __init__(self) -> None:
-            self.raw_called_with: bytes | None = None
+            self.write_called_with: bytes | None = None
             self.closed = False
 
-        def _raw(self, payload: bytes) -> None:
-            self.raw_called_with = payload
+        def write(self, payload: bytes) -> None:
+            self.write_called_with = payload
 
         def close(self) -> None:
             self.closed = True
@@ -205,5 +205,20 @@ def test_send_writes_bytes_and_closes_printer() -> None:
     r.text("ping").cut()
     fp = FakePrinter()
     r.send(fp)  # type: ignore[arg-type]
-    assert fp.raw_called_with == r.bytes
+    assert fp.write_called_with == r.bytes
     assert fp.closed is True
+
+
+def test_send_byte_stream_is_star_graphic_raster() -> None:
+    """Sanity check: send() emits the Star Graphic entry-into-raster-mode
+    bytes (the load-bearing piece for the TSP143IIIU)."""
+    r = Receipt()
+    r.text("ping").cut()
+    payload = r.bytes
+    # ESC * r R ESC * r A — the "enter raster mode" command from
+    # rastertostar.c. Without these 8 bytes the printer drops the job.
+    assert b"\x1b*rR\x1b*rA" in payload
+    # ESC @ printer init at the start.
+    assert payload.startswith(b"\x1b\x40")
+    # End of job marker.
+    assert payload.endswith(b"\x04\x1b*rB")

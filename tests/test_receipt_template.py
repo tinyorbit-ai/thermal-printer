@@ -1,4 +1,9 @@
-"""receipt template — end-to-end render against a fixture JSONL."""
+"""receipt template — end-to-end render against a fixture JSONL.
+
+The narrative summary is provided by the caller via ``ctx["summary"]``
+(passed through the CLI's ``--summary`` flag). Absence collapses to
+``(summary unavailable)``; see ADR 0006.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ def _stage_fixture(tmp_path: Path, jsonl_src: Path) -> tuple[str, str]:
     project_dir.mkdir(parents=True)
     session_id = "test-session"
     (project_dir / f"{session_id}.jsonl").write_bytes(jsonl_src.read_bytes())
-    return cwd, session_id, projects
+    return cwd, session_id
 
 
 @pytest.fixture(autouse=True)
@@ -30,23 +35,19 @@ def patch_projects_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(session_mod, "CLAUDE_PROJECTS_DIR", tmp_path / "projects")
 
 
-def test_receipt_template_renders_with_summary_unavailable_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_receipt_template_renders_with_summary_unavailable_when_no_arg(
+    tmp_path: Path,
 ) -> None:
-    """With no API key, the summary is None and the receipt prints
-    `(summary unavailable)` — stats are unchanged."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    """No --summary passed → `(summary unavailable)` in the receipt; stats unchanged."""
     fixture = Path(__file__).parent / "fixtures" / "session-sample.jsonl"
-    cwd, sid, _ = _stage_fixture(tmp_path, fixture)
+    cwd, sid = _stage_fixture(tmp_path, fixture)
 
     r = Receipt()
     receipt_template.render({"cwd": cwd, "session_id": sid}, r)
 
     joined = "\n".join(r._lines)
     assert "(summary unavailable)" in joined
-    # Stats lines for the real session-sample fixture (3 assistant turns,
-    # 100+200+50 input).
-    assert "350" in joined  # input tokens
+    assert "350" in joined  # input tokens from fixture
     assert "150" in joined  # output tokens
     assert r._cuts == 1
 
@@ -55,36 +56,51 @@ def test_receipt_template_uses_empty_state_for_brand_new_session(
     tmp_path: Path,
 ) -> None:
     fixture = Path(__file__).parent / "fixtures" / "session-empty.jsonl"
-    cwd, sid, _ = _stage_fixture(tmp_path, fixture)
+    cwd, sid = _stage_fixture(tmp_path, fixture)
 
     r = Receipt()
     receipt_template.render({"cwd": cwd, "session_id": sid}, r)
 
     joined = "\n".join(r._lines)
     assert "(session just started)" in joined
-    assert "(summary unavailable)" not in joined  # empty state preempts the LLM block
+    # Empty state preempts the summary block.
+    assert "(summary unavailable)" not in joined
     assert r._cuts == 1
 
 
-def test_receipt_template_falls_back_on_llm_fault(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Each simulated LLM failure mode keeps the stats intact and prints
-    `(summary unavailable)` — the gate-3 invariant."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+def test_receipt_template_prints_provided_summary(tmp_path: Path) -> None:
+    """A --summary arg lands in the receipt verbatim (subject to text wrapping)."""
     fixture = Path(__file__).parent / "fixtures" / "session-sample.jsonl"
-    cwd, sid, _ = _stage_fixture(tmp_path, fixture)
+    cwd, sid = _stage_fixture(tmp_path, fixture)
 
-    from thermal_print import llm
+    summary = "wrestled the printer.\nshipped the rewrite.\nphase 5 sings."
+    r = Receipt()
+    receipt_template.render(
+        {"cwd": cwd, "session_id": sid, "summary": summary}, r
+    )
 
-    for fault in ["timeout", "401", "429", "500", "malformed"]:
-        monkeypatch.setenv(llm._FAULT_ENV, fault)
-        r = Receipt()
-        receipt_template.render({"cwd": cwd, "session_id": sid}, r)
-        joined = "\n".join(r._lines)
-        assert "(summary unavailable)" in joined, f"fault {fault} did not degrade"
-        assert "350" in joined, f"fault {fault} clobbered stats"
-        assert r._cuts == 1
+    joined = "\n".join(r._lines)
+    # Each newline-separated summary line should appear on its own row.
+    assert "wrestled the printer." in joined
+    assert "shipped the rewrite." in joined
+    assert "phase 5 sings." in joined
+    # The fallback should not be used when a real summary is given.
+    assert "(summary unavailable)" not in joined
+    assert r._cuts == 1
+
+
+def test_receipt_template_treats_empty_summary_as_missing(tmp_path: Path) -> None:
+    """An empty / whitespace-only --summary degrades to the fallback."""
+    fixture = Path(__file__).parent / "fixtures" / "session-sample.jsonl"
+    cwd, sid = _stage_fixture(tmp_path, fixture)
+
+    r = Receipt()
+    receipt_template.render(
+        {"cwd": cwd, "session_id": sid, "summary": "   \n  "}, r
+    )
+
+    joined = "\n".join(r._lines)
+    assert "(summary unavailable)" in joined
 
 
 def test_receipt_template_requires_cwd() -> None:

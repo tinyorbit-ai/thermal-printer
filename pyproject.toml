@@ -4,10 +4,8 @@ version = "0.1.0"
 description = "CLI to drive a Star TSP 100III thermal printer; backbone for /receipt in Claude Code."
 requires-python = ">=3.11"
 dependencies = [
-    "python-escpos==3.1",
     "pyusb==1.3.1",
     "Pillow==12.2.0",
-    "anthropic==0.104.1",
 ]
 
 [project.scripts]

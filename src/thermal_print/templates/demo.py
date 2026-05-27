@@ -1,6 +1,6 @@
 """demo — exercises every primitive in the Receipt grammar.
 
-The visual showcase for the project: a centered crab logo, a double-height
+The visual showcase for the project: a centered Claude logo, a double-height
 header, dividers, two rows, a body line, a small centered footer, the
 persistent serial, and one cut.
 """
@@ -15,7 +15,7 @@ NAME = "demo"
 
 
 def render(ctx: dict[str, Any], r: Receipt) -> None:
-    r.logo("crab")
+    r.logo("claude")
     r.header("CLAUDE CODE")
     r.divider("=")
     r.row("Tokens", "4,221")

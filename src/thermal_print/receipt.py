@@ -1,11 +1,12 @@
-"""Receipt builder — the 32-char layout grammar.
+"""Receipt builder — bitmap renderer for the TSP143IIIU.
 
-The only module that knows about font-A width, alignment, dividers, and the
-cut command. Templates compose receipts by calling these methods; the CLI
-flushes the accumulated bytes via :py:meth:`Receipt.send`.
+The printer accepts only Star Graphic raster (see [[notes/2026-05-27-tsp143iiiu-default-mode]]),
+so every primitive draws onto a growing 576-pixel-wide monochrome PIL
+image. :meth:`Receipt.send` crops to actual content, encodes the
+bitmap via :mod:`star_raster`, and writes it to the USB device.
 
-Cut ownership lives here (per [[architecture]]); :mod:`printer` only opens,
-writes, and closes the USB device.
+The 32-char design grid from ADR 0004 survives — it's just a layout
+choice now (32 chars × ~18px = 576px), not a property of the printer.
 """
 
 from __future__ import annotations
@@ -13,182 +14,245 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from escpos.printer import Dummy
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from . import state
+from .star_raster import PRINTABLE_WIDTH_PX, encode_job
 
 if TYPE_CHECKING:
-    from escpos.escpos import Escpos
-
+    from .printer import StarUsbPrinter
 
 ASSETS_DIR = Path(__file__).parent / "assets"
 
-
-__all__ = ["Receipt", "GRID_WIDTH"]
-
-
+# 32-character design grid (ADR 0004 design choice).
 GRID_WIDTH = 32
-"""Design grid width at font A. Per ADR 0004 this is the *design* choice; the
-TSP 100III's hardware printable width at font A is wider, but legibility
-beats density."""
+
+# 576 / 32 = 18 px/char target. Menlo at size 28 gives ~17 px monospace
+# (32 chars = 540 px) — comfortable inside the 576 px printable area.
+BODY_FONT_SIZE = 28
+HEADER_FONT_SIZE = 56  # ~2× body for the "double-height" effect
+FOOTER_FONT_SIZE = 18  # small, centered (ADR 0004 footer)
+
+_BODY_FONT_PATH = "/System/Library/Fonts/Menlo.ttc"
+
+# Vertical padding between lines so type isn't crushed against itself.
+_LINE_PADDING = 4
+
+# Initial canvas height; the image is cropped to the actual content at
+# send time. 4096 px ≈ 51 cm of paper — way past any plausible receipt.
+_INITIAL_CANVAS_H = 4096
+
+# Left/right margins inside the printable area.
+_MARGIN_PX = 8
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(_BODY_FONT_PATH, size)
+    except OSError:
+        # On a non-macOS dev box (CI) PIL's default font keeps tests passing.
+        return ImageFont.load_default()
 
 
 class Receipt:
-    """Accumulate escpos bytes for one receipt, then flush to a printer.
-
-    Internal byte buffer is a python-escpos :class:`Dummy` printer — it has
-    the same API as the real printer (``text``, ``set``, ``cut``, …) but
-    captures bytes to ``.output`` instead of writing to USB. This keeps
-    layout testable in isolation: render to bytes, compare to a fixture.
+    """Accumulate a receipt image, then flush it as Star Graphic raster.
 
     Auxiliary state (``_cuts``, ``_lines``) lets structural tests assert
-    "exactly one cut" and "no row exceeds 32 chars" without parsing the raw
-    byte stream.
+    "exactly one cut" and "no row exceeds 32 chars" without inspecting
+    raw bitmap pixels.
     """
 
     GRID_WIDTH = GRID_WIDTH
+    WIDTH_PX = PRINTABLE_WIDTH_PX
 
     def __init__(self) -> None:
-        self._buf: Dummy = Dummy()
+        self._img: Image.Image = Image.new("1", (self.WIDTH_PX, _INITIAL_CANVAS_H), 1)
+        self._draw: ImageDraw.ImageDraw = ImageDraw.Draw(self._img)
+        self._y: int = 0
         self._cuts: int = 0
         self._lines: list[str] = []
 
-    # ── primitive: track + write ────────────────────────────────────────
+        self._font_body = _load_font(BODY_FONT_SIZE)
+        self._font_header = _load_font(HEADER_FONT_SIZE)
+        self._font_footer = _load_font(FOOTER_FONT_SIZE)
 
-    def _writeln(self, line: str) -> None:
-        """Track the line for structural assertions and emit it."""
-        self._lines.append(line)
-        self._buf.textln(line)
+        self._lh_body = self._font_body.size + _LINE_PADDING
+        self._lh_header = self._font_header.size + _LINE_PADDING * 2
+        self._lh_footer = self._font_footer.size + _LINE_PADDING
+
+        # Pre-measure monospace body-font character width once. Menlo is
+        # truly monospaced, so any non-space character works.
+        bbox = self._font_body.getbbox("M")
+        self._body_char_w = bbox[2] - bbox[0]
+
+    # ── primitives ──────────────────────────────────────────────────────
+
+    def _track_line(self, text: str) -> None:
+        """Record the logical text content for structural assertions."""
+        self._lines.append(text)
+
+    def _draw_centered(self, text: str, font: ImageFont.FreeTypeFont) -> int:
+        bbox = font.getbbox(text)
+        text_w = bbox[2] - bbox[0]
+        x = max(_MARGIN_PX, (self.WIDTH_PX - text_w) // 2)
+        self._draw.text((x, self._y), text, font=font, fill=0)
+        return text_w
+
+    def _draw_left(self, text: str, font: ImageFont.FreeTypeFont, x: int = _MARGIN_PX) -> None:
+        self._draw.text((x, self._y), text, font=font, fill=0)
+
+    def _draw_right(self, text: str, font: ImageFont.FreeTypeFont) -> None:
+        bbox = font.getbbox(text)
+        text_w = bbox[2] - bbox[0]
+        x = self.WIDTH_PX - text_w - _MARGIN_PX
+        self._draw.text((x, self._y), text, font=font, fill=0)
 
     # ── logo ────────────────────────────────────────────────────────────
 
-    def logo(self, name: str) -> Receipt:
-        """Raster a 1-bit PNG from :data:`ASSETS_DIR`, centered.
-
-        ``name`` is the bare filename without extension (e.g. ``"crab"``
-        loads ``assets/crab.png``). python-escpos handles the raster
-        encoding via the GS v 0 command path.
-        """
+    def logo(self, name: str) -> "Receipt":
+        """Paste a 1-bit PNG from ``assets/<name>.png``, centered."""
         asset = ASSETS_DIR / f"{name}.png"
         if not asset.exists():
             raise FileNotFoundError(f"logo asset not found: {asset}")
-        img = Image.open(asset)
-        img.load()
-        self._buf.set(align="center")
-        self._buf.image(img)
-        self._buf.set()
+        bitmap = Image.open(asset).convert("1")
+        if bitmap.width > self.WIDTH_PX:
+            # Scale down preserving aspect, snap width to byte boundary.
+            new_w = (self.WIDTH_PX // 8) * 8
+            new_h = int(bitmap.height * new_w / bitmap.width)
+            bitmap = bitmap.resize((new_w, new_h), Image.NEAREST)
+        x = (self.WIDTH_PX - bitmap.width) // 2
+        self._img.paste(bitmap, (x, self._y))
+        self._y += bitmap.height + _LINE_PADDING
         return self
 
     # ── serial ──────────────────────────────────────────────────────────
 
-    def serial(self) -> Receipt:
-        """Emit ``REC-#NNNN``, right-aligned. Bumps the persisted counter."""
+    def serial(self) -> "Receipt":
+        """Emit ``REC-#NNNN`` right-aligned. Bumps the persisted counter."""
         n = state.bump_serial()
-        line = f"REC-#{n:04d}"
-        self._buf.set(align="right")
-        self._writeln(line)
-        self._buf.set()
+        text = f"REC-#{n:04d}"
+        self._draw_right(text, self._font_body)
+        self._track_line(text)
+        self._y += self._lh_body
         return self
 
     # ── headings ────────────────────────────────────────────────────────
 
-    def header(self, text: str) -> Receipt:
-        """Double-height, double-width, centered, bold. Receipt title."""
-        self._buf.set(double_height=True, double_width=True, align="center", bold=True)
-        self._writeln(text)
-        self._buf.set()  # reset to defaults
+    def header(self, text: str) -> "Receipt":
+        """Double-height (≈2×) centered header."""
+        self._draw_centered(text, self._font_header)
+        self._track_line(text)
+        self._y += self._lh_header
         return self
 
-    def subheader(self, text: str) -> Receipt:
-        """Single-height, centered, bold. Receipt sub-title."""
-        self._buf.set(align="center", bold=True)
-        self._writeln(text)
-        self._buf.set()
+    def subheader(self, text: str) -> "Receipt":
+        """Single-height centered subheader (uses body font)."""
+        self._draw_centered(text, self._font_body)
+        self._track_line(text)
+        self._y += self._lh_body
         return self
 
     # ── separators ──────────────────────────────────────────────────────
 
-    def divider(self, char: str = "-") -> Receipt:
-        """Full-width divider line. Standard chars per ADR 0004: ``-`` light,
+    def divider(self, char: str = "-") -> "Receipt":
+        """Full-width divider line. Standard chars (ADR 0004): ``-`` light,
         ``=`` heavy, ``·`` dotted."""
         if len(char) != 1:
             raise ValueError(f"divider char must be a single character, got {char!r}")
-        self._writeln(char * self.GRID_WIDTH)
+        line = char * self.GRID_WIDTH
+        self._draw_left(line, self._font_body)
+        self._track_line(line)
+        self._y += self._lh_body
         return self
 
-    def spacer(self) -> Receipt:
+    def spacer(self) -> "Receipt":
         """One blank line."""
-        self._writeln("")
+        self._track_line("")
+        self._y += self._lh_body
         return self
 
     # ── content ─────────────────────────────────────────────────────────
 
-    def row(self, label: str, value: str) -> Receipt:
-        """A label/value row, padded to fill the 32-char grid.
+    def row(self, label: str, value: str) -> "Receipt":
+        """Label-on-left / value-on-right row, both sharing the 32-char grid.
 
-        Overflow policy: the **value** is the contract — it is reserved
-        space-first and never truncated when it fits the grid. The
-        **label** is truncated from the right with ``…`` if it doesn't
-        fit alongside the value with at least one separating space. If
-        the value alone fills/exceeds the grid, the label is dropped and
-        the value is hard-truncated.
+        Overflow policy (ADR 0004): the value is reserved space-first;
+        if value alone fills the grid it gets hard-truncated and the
+        label is dropped. Otherwise the label is truncated from the
+        right with ``…`` to leave at least one separating space.
         """
         label = str(label)
         value = str(value)
 
         if len(value) >= self.GRID_WIDTH:
             line = value[: self.GRID_WIDTH]
+            self._draw_left(line, self._font_body)
         else:
-            max_label_len = self.GRID_WIDTH - len(value) - 1  # 1+ separating space
+            max_label_len = self.GRID_WIDTH - len(value) - 1
             if len(label) > max_label_len:
                 label = label[: max_label_len - 1] + "…" if max_label_len >= 1 else ""
             pad = self.GRID_WIDTH - len(label) - len(value)
             line = label + " " * pad + value
+            # Draw label at the left, value right-aligned.
+            if label:
+                self._draw_left(label, self._font_body)
+            self._draw_right(value, self._font_body)
 
-        self._writeln(line)
+        self._track_line(line)
+        self._y += self._lh_body
         return self
 
-    def text(self, txt: str) -> Receipt:
+    def text(self, txt: str) -> "Receipt":
         """Plain text. Word-wrapped at 32 chars; tokens longer than 32 hard-break."""
         for line in _wrap(txt, self.GRID_WIDTH):
-            self._writeln(line)
+            self._draw_left(line, self._font_body)
+            self._track_line(line)
+            self._y += self._lh_body
         return self
 
     # ── footer ──────────────────────────────────────────────────────────
 
-    def footer(self, text: str) -> Receipt:
-        """Single-line footer, small (font B) and centered."""
-        self._buf.set(align="center", font="b")
-        self._writeln(text)
-        self._buf.set()
+    def footer(self, text: str) -> "Receipt":
+        """Small (footer font) centered single line."""
+        self._draw_centered(text, self._font_footer)
+        self._track_line(text)
+        self._y += self._lh_footer
         return self
 
     # ── cut + flush ─────────────────────────────────────────────────────
 
-    def cut(self) -> Receipt:
-        """Emit a partial cut. Tracked so tests can assert exactly one per receipt."""
-        self._buf.cut()
+    def cut(self) -> "Receipt":
+        """Mark the receipt for partial cut. Tracked so tests can assert
+        exactly one cut per receipt; the actual cut byte is emitted by
+        :func:`star_raster.encode_job` from a flag at send time."""
         self._cuts += 1
         return self
 
-    def send(self, printer: Escpos) -> None:
-        """Flush the accumulated byte stream to the printer in one write, then close.
-
-        Single USB write per print where the OS allows — keeps the device
-        and the layout grammar decoupled.
-        """
+    def send(self, printer: "StarUsbPrinter") -> None:
+        """Crop the image to actual content, encode as Star Graphic raster,
+        and write to the printer in one USB transaction."""
         try:
-            printer._raw(self._buf.output)
+            payload = self.bytes
+            printer.write(payload)
         finally:
             printer.close()
 
-    # ── introspection (for tests + debugging) ───────────────────────────
+    # ── introspection ───────────────────────────────────────────────────
+
+    @property
+    def image(self) -> Image.Image:
+        """The rendered receipt as a PIL Image, cropped to actual content."""
+        # Add a small bottom margin so the last line isn't flush against the cut.
+        end_y = min(self._y + _LINE_PADDING * 2, _INITIAL_CANVAS_H)
+        return self._img.crop((0, 0, self.WIDTH_PX, end_y))
 
     @property
     def bytes(self) -> bytes:
-        """Raw escpos byte stream accumulated so far."""
-        return self._buf.output
+        """The full Star Graphic raster job as a byte string."""
+        return encode_job(self.image, cut=self._cuts > 0)
+
+
+# ── helpers ────────────────────────────────────────────────────────────
 
 
 def _wrap(text: str, width: int) -> list[str]:
@@ -207,14 +271,12 @@ def _wrap(text: str, width: int) -> list[str]:
             continue
         current = ""
         for word in paragraph.split(" "):
-            # Hard-break tokens longer than the grid width.
             while len(word) > width:
                 if current:
                     lines.append(current)
                     current = ""
                 lines.append(word[:width])
                 word = word[width:]
-
             if not current:
                 current = word
             elif len(current) + 1 + len(word) <= width:
@@ -224,3 +286,6 @@ def _wrap(text: str, width: int) -> list[str]:
                 current = word
         lines.append(current)
     return lines
+
+
+__all__ = ["Receipt", "ASSETS_DIR", "GRID_WIDTH"]

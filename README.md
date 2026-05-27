@@ -29,9 +29,10 @@ thermal-print print receipt --session-id $SID --cwd $PWD   # stats + Haiku narra
 …or, from inside Claude Code, type `/receipt` — the slash command shim
 at `.claude/commands/receipt.md` does the right thing.
 
-Set `ANTHROPIC_API_KEY` in your environment to activate the narrative
-summary on `print receipt`; without it the receipt prints with
-`(summary unavailable)` and the stats unchanged.
+The narrative summary on `print receipt` is written by the parent
+Claude Code session and passed to the CLI via `--summary`; see ADR
+0006. From the CLI directly (without `/receipt`), the summary block
+prints `(summary unavailable)` and the stats are unchanged.
 
 ## Templates
 

@@ -33,7 +33,7 @@ def render(ctx: dict[str, Any], r: Receipt) -> None:
     jsonl_path = find_session_file(cwd, session_id=session_id, latest=latest)
     stats = parse(jsonl_path)
 
-    r.logo("crab")
+    r.logo("claude")
     r.header("SESSION")
     r.divider("=")
 
