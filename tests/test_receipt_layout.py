@@ -153,6 +153,29 @@ def test_logo_missing_raises() -> None:
         r.logo("does-not-exist")
 
 
+def test_paste_pastes_arbitrary_pil_image() -> None:
+    """Receipt.paste accepts a PIL Image directly, not a file path.
+    Used by procedural templates (e.g. mandala) that render at runtime."""
+    from PIL import Image as PILImage
+
+    img = PILImage.new("1", (200, 50), 1)
+    r = Receipt()
+    r.paste(img)
+    # Paste emits raster bytes but no tracked _lines.
+    assert r._lines == []
+    assert len(r.bytes) > 0
+
+
+def test_paste_downscales_when_wider_than_printable_area() -> None:
+    """An oversized image is shrunk to fit (snapped to byte boundary)."""
+    from PIL import Image as PILImage
+
+    img = PILImage.new("1", (1000, 200), 1)
+    r = Receipt()
+    r.paste(img)  # must not raise; should downscale internally
+    assert len(r.bytes) > 0
+
+
 # ── serial ─────────────────────────────────────────────────────────────
 
 

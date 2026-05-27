@@ -12,12 +12,11 @@ from thermal_print.cli import _discover_in_path, discover_templates
 # ── shipped templates ──────────────────────────────────────────────────
 
 
-def test_shipped_registry_has_hello_and_demo() -> None:
+def test_shipped_registry_has_all_templates() -> None:
     registry = discover_templates()
-    assert "hello" in registry
-    assert "demo" in registry
-    assert callable(registry["hello"])
-    assert callable(registry["demo"])
+    for name in ("hello", "demo", "session", "receipt", "playground", "mandala"):
+        assert name in registry, f"shipped template missing: {name}"
+        assert callable(registry[name])
 
 
 # ── _smoke as a valid template (gate item 4a) ──────────────────────────

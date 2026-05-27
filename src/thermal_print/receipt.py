@@ -107,22 +107,37 @@ class Receipt:
         x = self.WIDTH_PX - text_w - _MARGIN_PX
         self._draw.text((x, self._y), text, font=font, fill=0)
 
-    # ── logo ────────────────────────────────────────────────────────────
+    # ── images ──────────────────────────────────────────────────────────
 
-    def logo(self, name: str) -> "Receipt":
-        """Paste a 1-bit PNG from ``assets/<name>.png``, centered."""
-        asset = ASSETS_DIR / f"{name}.png"
-        if not asset.exists():
-            raise FileNotFoundError(f"logo asset not found: {asset}")
-        bitmap = Image.open(asset).convert("1")
+    def _paste_image(self, bitmap: Image.Image) -> None:
+        """Centered paste with auto-downscale to the printable width."""
+        if bitmap.mode != "1":
+            bitmap = bitmap.convert("1")
         if bitmap.width > self.WIDTH_PX:
-            # Scale down preserving aspect, snap width to byte boundary.
             new_w = (self.WIDTH_PX // 8) * 8
             new_h = int(bitmap.height * new_w / bitmap.width)
             bitmap = bitmap.resize((new_w, new_h), Image.NEAREST)
         x = (self.WIDTH_PX - bitmap.width) // 2
         self._img.paste(bitmap, (x, self._y))
         self._y += bitmap.height + _LINE_PADDING
+
+    def logo(self, name: str) -> "Receipt":
+        """Paste a 1-bit PNG from ``assets/<name>.png``, centered."""
+        asset = ASSETS_DIR / f"{name}.png"
+        if not asset.exists():
+            raise FileNotFoundError(f"logo asset not found: {asset}")
+        self._paste_image(Image.open(asset))
+        return self
+
+    def paste(self, img: Image.Image) -> "Receipt":
+        """Paste an arbitrary PIL ``Image`` onto the canvas, centered.
+
+        The image is converted to 1-bit and auto-downscaled if wider
+        than the printable area. Distinct from :meth:`logo` (which
+        loads from ``assets/``) and from the :attr:`image` property
+        (which returns the rendered receipt).
+        """
+        self._paste_image(img)
         return self
 
     # ── serial ──────────────────────────────────────────────────────────

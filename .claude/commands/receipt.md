@@ -30,6 +30,10 @@ for the deterministic stats.
      --summary "<your 3-5 line summary here>"
    ```
 
+   Assumes `uv tool install .` has been run from the thermal-printer
+   repo (puts `thermal-print` on PATH). From a checkout without that,
+   substitute `uv run thermal-print …`.
+
 3. If the CLI exits non-zero, surface the stderr verbatim and stop — do
    not try to print again or work around the error.
 
