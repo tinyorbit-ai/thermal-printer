@@ -5,6 +5,12 @@ USB, plus a `/receipt` Claude Code slash command that prints a physical
 receipt of a coding session — tokens, time, files touched, lines added,
 cost, and a 3–5 line narrative written by the session's own Claude.
 
+<p align="center">
+  <img src="wiki/assets/receipt-demo.jpg" alt="A Star TSP100III thermal printer with a printed thermal-printer session receipt — Claude logo, token counts, cost, tool breakdown, and a hand-written narrative" width="420">
+</p>
+
+…and what it renders, in the abstract:
+
 ```
                             ┌──────────────┐
                             │   CLAUDE     │  (the actual logo)

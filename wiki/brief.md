@@ -19,6 +19,10 @@ Just me, Matt. Two moments:
 
 **Tactile and satisfying — a real POS receipt.** Snappy, instant, the kachunk-of-the-cutter at the end. Tight monospace layout, dense info, a little nostalgic. The receipt is a physical artifact of intangible work; the feel of getting one matters as much as the data on it.
 
+![A real /receipt print on the Star TSP100III](assets/receipt-demo.jpg)
+
+*The thing itself — a session receipt on the TSP143IIIU.*
+
 This drives:
 - A real **receipt design spec** (see [[decisions/0001-shape]] and forthcoming layout ADR): 32-char grid, named sections, double-height for headers, deliberate whitespace, a serial number (`REC-#0042`), a footer divider.
 - Sub-second latency from invocation to first byte to the printer.
