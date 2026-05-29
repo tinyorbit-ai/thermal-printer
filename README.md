@@ -51,14 +51,9 @@ claim the interface.
 
 ## Daily use
 
-From inside a Claude Code session, type:
-
-```
-/receipt
-```
-
-…and the slash command at `.claude/commands/receipt.md` writes the
-narrative summary from its own context and shells out to the CLI.
+From inside a Claude Code session, type `/receipt`. The slash command at
+`.claude/commands/receipt.md` writes the narrative summary from its own
+context and shells out to the CLI.
 
 From a terminal, manually:
 
@@ -67,48 +62,20 @@ thermal-print print demo                                        # visual showcas
 thermal-print print session --session-id $SID --cwd $PWD        # stats only
 thermal-print print receipt --session-id $SID --cwd $PWD \
   --summary "your 3-5 line narrative."                          # stats + narrative
-thermal-print print playground                                  # layout test
 thermal-print print mandala                                     # procedural art
 ```
 
-The session-id mechanism is the `CLAUDE_CODE_SESSION_ID` env var (also
-just `$PWD` for `--cwd`); inside a Claude Code session both are
-available without any setup.
+Inside a Claude Code session, `$CLAUDE_CODE_SESSION_ID` and `$PWD` are
+both available with no setup.
 
 ## Templates
 
 `thermal-print print <name>` dispatches to any module in
-`src/thermal_print/templates/`. Each module exposes `NAME: str` and
-`render(ctx, r: Receipt)`. Drop a new file there, run the CLI — done.
-The shipped set:
-
-| Template     | What it does                                                       |
-|--------------|--------------------------------------------------------------------|
-| `hello`      | Smoke test. `hello, matt` + cut.                                   |
-| `demo`       | Exercises every primitive — logo, header, dividers, rows, footer.  |
-| `session`    | Deterministic session stats from a Claude Code JSONL.              |
-| `receipt`    | `session` + narrative summary passed via `--summary`.              |
-| `playground` | Layout test. Touches every Receipt method; useful after refactors. |
-| `mandala`    | Procedural radial bitmap, unique each print. Pushes the raster path. |
-
-## How it talks to the printer
-
-The TSP143IIIU does **not** speak ESC/POS — it ships in Star Graphic
-raster mode and silently drops character-stream commands. The protocol
-was reverse-engineered from Star's open-source CUPS filter and is
-encoded by `src/thermal_print/star_raster.py`. See
-[`wiki/notes/2026-05-27-tsp143iiiu-default-mode.md`](wiki/notes/2026-05-27-tsp143iiiu-default-mode.md)
-for the byte-by-byte derivation and the load-bearing
-`ESC * r R / ESC * r A` quirk.
-
-`Receipt` is a bitmap renderer: every primitive draws onto a 576-pixel-
-wide growing PIL image; `send()` crops to actual content, encodes as
-Star Graphic bytes via `star_raster.encode_job`, and writes one USB
-transaction.
+`src/thermal_print/templates/` exposing `NAME: str` and
+`render(ctx, r: Receipt)`. Drop a file there, run the CLI — done.
+Shipped: `hello`, `demo`, `session`, `receipt`, `playground`, `mandala`.
 
 ## Development
-
-From a checkout:
 
 ```sh
 uv sync
@@ -117,50 +84,30 @@ uv run thermal-print print hello
 ```
 
 Tests cover the bitmap byte stream (snapshot + structural assertions),
-template auto-discovery, the persistent serial counter, the Claude
-Code JSONL parser, and both new templates.
+template auto-discovery, the persistent serial counter, and the Claude
+Code JSONL parser.
 
-## Troubleshooting
+**Printer not printing?** The TSP143IIIU does **not** speak ESC/POS — it
+ships in Star Graphic raster mode and silently drops character-stream
+commands (bytes accepted, no paper, no error). The full discovery story,
+the load-bearing `ESC * r R / ESC * r A` quirk, and the verified USB
+constants live in
+[`wiki/notes/2026-05-27-tsp143iiiu-default-mode.md`](wiki/notes/2026-05-27-tsp143iiiu-default-mode.md).
+For `libusb backend not found` run `brew install libusb`; for permission
+errors, remove the Star from System Settings → Printers and replug.
 
-- **`libusb backend not found`** → `brew install libusb`.
-- **`no USB device with VID … PID …`** → confirm the printer is plugged
-  in and powered. Run `ioreg -p IOUSB -l | grep -A2 Star` to see the
-  actual VID/PID; if they don't match `src/thermal_print/printer.py`,
-  update the constants and file a wiki note.
-- **`USB permission denied`** → remove the Star from System Settings →
-  Printers, unplug/replug the USB cable, retry.
-- **Bytes accepted but no paper** → the printer is probably in a non-
-  Star-Graphic command mode (StarPRNT, ESC/POS). See
-  [`wiki/notes/2026-05-27-tsp143iiiu-default-mode.md`](wiki/notes/2026-05-27-tsp143iiiu-default-mode.md)
-  for the discovery story; the working bytes are in `star_raster.py`.
+## The why — see the wiki
 
-## Project map
+This repo keeps an Obsidian-style engineering wiki as the source of truth
+for *why* it's built the way it is. Start at
+[`wiki/index.md`](wiki/index.md):
 
-```
-src/thermal_print/
-  cli.py              # argparse + dispatch + flag plumbing
-  printer.py          # raw pyusb device adapter (StarUsbPrinter)
-  receipt.py          # Receipt — bitmap renderer (the 32-char grid lives here)
-  star_raster.py      # Star Graphic encoder (PIL Image → bytes)
-  session.py          # Claude Code JSONL parser + cost calc + line counting
-  state.py            # ~/.thermal-printer/state.json — persistent serial counter
-  templates/
-    hello.py / demo.py / session.py / receipt.py / playground.py / mandala.py
-  assets/
-    claude.png        # 400x240 1-bit Claude logo, block-character derived
-
-wiki/
-  index.md            # map of content
-  brief.md            # what we're building, for whom, the feel
-  plan.md             # the locked, hardened phased plan
-  architecture.md     # the 30-second version (kept current)
-  build-log.md        # one entry per phase, the gate met before merge
-  decisions/          # ADRs 0001-0006
-  notes/              # incident write-ups (TSP143IIIU mode discovery lives here)
-
-.claude/commands/
-  receipt.md          # the /receipt slash command
-```
+- [`brief`](wiki/brief.md) — what it is, the feel it's going for, non-goals
+- [`architecture`](wiki/architecture.md) — the device adapter / renderer / template seams
+- [`decisions/`](wiki/decisions/) — ADRs 0001–0006 (shape, CLI, templates, layout grammar, stats schema, the LLM-via-subagent pivot)
+- [`build-log`](wiki/build-log.md) — one entry per phase, including the hardware/raster pivot
+- [`notes/`](wiki/notes/) — incident write-ups (the TSP143IIIU mode discovery)
+- [`retro`](wiki/retro.md) · [`learnings`](wiki/learnings.md) · [`improvements`](wiki/improvements.md)
 
 ## License
 
