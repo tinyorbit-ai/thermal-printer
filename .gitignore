@@ -18,6 +18,3 @@ dist/
 
 # Local state (the personal serial counter)
 .thermal-print-state.json
-
-# Local Claude Code skills (developer-specific symlinks)
-.claude/skills/
